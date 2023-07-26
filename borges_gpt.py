@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import time
+
+TRAIN = True
 
 #Hyperparameters
 block_size = 256
@@ -14,14 +15,12 @@ n_head = 6
 n_layer = 6
 head_size = n_embd/n_head
 dropout = 0.2
-device = 'cpu'
-
-TRAIN = False
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 #Import dataset
-with open ('borges.txt', 'r', encoding='utf-8') as f:
+with open ('dataset.txt', 'r', encoding='utf-8') as f:
     text = f.read()
-print(len(text))
+
 #Get all the characters in order
 chars = sorted(list(set(text)))
 vocab_size = len(chars)
@@ -52,10 +51,10 @@ torch.manual_seed(1337)
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i:i+block_size] for i in ix])    
+    x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     x, y = x.to(device), y.to(device)
-    return x, y 
+    return x, y
 
 @torch.inference_mode()
 def estimate_loss():
@@ -104,7 +103,7 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embd, n_embd)
     def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)   
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.proj(out)
         return out
 
@@ -117,7 +116,7 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(n_embd, 4*n_embd),
             nn.ReLU(),
-            nn.Linear(4*n_embd, n_embd), 
+            nn.Linear(4*n_embd, n_embd),
             nn.Dropout(dropout)
         )
     def forward(self,x):
@@ -149,9 +148,9 @@ class BigramLanguageModel(nn.Module):
         self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd) # final layer normalization
         self.lm_head = nn.Linear(n_embd, vocab_size)
-    def forward(self, idx, targets = None): 
+    def forward(self, idx, targets = None):
         B, T = idx.shape
-        tok_emb = self.token_embedding_table(idx) 
+        tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))
         x = tok_emb + pos_emb
         x = self.blocks(x)
@@ -167,7 +166,7 @@ class BigramLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets)
 
         return logits, loss
-    
+
     def generate(self, idx, max_new_tokens):
         #idx is (B,T) the current context
         for _ in range(max_new_tokens):
@@ -186,38 +185,35 @@ model = BigramLanguageModel().to(device)
 logits, loss = model(xb, yb)
 
 #We generate some text with the random model
+'''
 print("Random model generation:")
-random_text = decode(model.generate(torch.zeros((1,1), dtype=torch.long, device=device), max_new_tokens=500)[0].tolist())
-
-print(random_text)
+print(decode(model.generate(torch.zeros((1,1), dtype=torch.long, device=device), max_new_tokens=500)[0].tolist()))
 print("")
+'''
 #Now we train the model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr = 3e-4)
 
 if TRAIN:
 
-    for epoch in range(epochs):
-        if epoch % eval_interval == 0:
-            losses = estimate_loss()
-            print(f"Epoch: {epoch} | train_loss: {losses['train']} | val loss: {losses['val']}")
-        xb, yb = get_batch('train')
-        logits, loss = model(xb, yb)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
+  for epoch in range(epochs):
+    if epoch % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"Epoch: {epoch} | train_loss: {losses['train']} | val loss: {losses['val']}")
+        params_name = 'model_params' + str(epoch)
+        torch.save(model.state_dict(), params_name)
+    xb, yb = get_batch('train')
+    logits, loss = model(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+
 
 else:
-    model.load_state_dict(torch.load('model_params', map_location=device))
+  model.load_state_dict(torch.load('model_params', map_location=device))
 
 #We generate some text with the trained model
 print("Trained model generation")
-output_text = decode(model.generate(torch.zeros((1,1), dtype=torch.long, device=device), max_new_tokens=1000)[0].tolist())
+print(decode(model.generate(torch.zeros((1,1), dtype=torch.long, device=device), max_new_tokens=5000)[0].tolist()))
 
 
-def print_text_animated(text):
-    for char in text:
-        print(char, end = "", flush=True)
-        time.sleep(0.02)
-
-print_text_animated(output_text)
